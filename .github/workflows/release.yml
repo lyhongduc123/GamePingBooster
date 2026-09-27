@@ -228,7 +228,15 @@ jobs:
 
           # No release yet - the normal path. gh creates it as a draft, uploads the assets, and only
           # then publishes, which is the order immutable releases require.
-          gh release create $tag @assets `
+          #
+          # A suffix means a pre-release, and GitHub has to be told: nothing here infers it from the
+          # tag's name, and `gh release list` and the /latest redirect would otherwise offer a beta
+          # to players as the current version. The validate step's regex is the authority on what a
+          # suffix is, so any "-" in the tag is one.
+          $preArgs = @()
+          if ($tag -match '-') { $preArgs = @('--prerelease') }
+
+          gh release create $tag @assets @preArgs `
             --repo $repo `
             --title "Game Ping Booster v$env:VERSION" `
             --verify-tag `
