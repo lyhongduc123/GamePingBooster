@@ -105,11 +105,15 @@ Source: "{#Root}\client\native\wintun\wintun.dll"; DestDir: "{app}"; Flags: igno
 ; The profile is content: the game's address ranges. It is read relative to the install
 ; directory, which is why ServiceConfig's profilePath default is a relative path and why nothing
 ; here writes an absolute one - an absolute path only works on the machine it was written on.
-; One file per game. The service loads every *.json beside the configured one, so a game is added
-; by shipping its file here and nothing else.
+; One file per game, so a game is added by shipping its file here and nothing else. Self-hosted:
+; the service loads every *.json beside the configured one. Licensed: the pushed, sealed profiles
+; are the only source of ranges, and a shipped file is merged too ONLY if it declares no ranges
+; and no relays - see TunnelEngine.LoadProfileAsync. That is what lets Minecraft ship here, since
+; a game-only file is the whole of what it has to contribute.
 Source: "{#Root}\profiles\pubg-vn.json"; DestDir: "{app}\profiles"; Flags: ignoreversion
 Source: "{#Root}\profiles\cs2-vn.json"; DestDir: "{app}\profiles"; Flags: ignoreversion
 Source: "{#Root}\profiles\valorant-vn.json"; DestDir: "{app}\profiles"; Flags: ignoreversion
+Source: "{#Root}\profiles\minecraft-vn.json"; DestDir: "{app}\profiles"; Flags: ignoreversion
 
 [Dirs]
 ; The service writes its configuration and logs here, as LocalSystem. Nothing is placed in it at

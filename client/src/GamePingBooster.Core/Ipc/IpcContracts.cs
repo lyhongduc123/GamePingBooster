@@ -32,7 +32,7 @@ public sealed class CommandMessage
 
     /// <summary>
     /// "connect" | "disconnect" | "status" | "reload-profile" | "set-relay" | "set-token" |
-    /// "set-profile" | "games" | "relays" | "set-relay-choice"
+    /// "set-profile" | "games" | "relays" | "set-relay-choice" | "set-server-address"
     /// </summary>
     [JsonPropertyName("verb")] public string Verb { get; set; } = "status";
 
@@ -78,6 +78,22 @@ public sealed class CommandMessage
     /// installed is never decided here; the running process decides that.
     /// </summary>
     [JsonPropertyName("gameId")] public string? GameId { get; set; }
+
+    /// <summary>
+    /// set-server-address: the server addresses to save for <see cref="GameId"/>, as the player
+    /// typed them - hostnames are kept as hostnames and resolved per connect, never stored as the
+    /// addresses they happen to answer with. An empty list clears the game's addresses.
+    ///
+    /// Travels with the game id rather than in a verb keyed by its own field for the reason
+    /// set-relay's licenceUrl does: it is one more thing the settings screen writes into the same
+    /// configuration, and a second place to put the game id is a second way for the two halves to
+    /// disagree about what was saved.
+    ///
+    /// The relay key stays write-only. These do not, and are answered back in
+    /// <see cref="StatusMessage.ServerAddresses"/>, because a player needs to see what is saved
+    /// and there is nothing secret about the name of a server they play on.
+    /// </summary>
+    [JsonPropertyName("serverAddresses")] public List<string>? ServerAddresses { get; set; }
 
     // ------------------------------------------------------------------ set-token
     //
@@ -245,6 +261,21 @@ public sealed class StatusMessage
     /// exists because reading this one for that gave an empty answer on every paying customer.
     /// </summary>
     [JsonPropertyName("relayEndpoints")] public List<string> RelayEndpoints { get; set; } = [];
+
+    /// <summary>
+    /// The server addresses saved for each game, keyed by game id, exactly as they were typed.
+    /// So the settings screen can show what is set, and re-open with it filled in, without the UI
+    /// reading a file it has no permission to read.
+    ///
+    /// Not a secret, unlike the key in set-relay: this is the name of a server somebody plays on,
+    /// it was typed on this machine, and it is already in this machine's status stream. The relay
+    /// key is not, and is never sent back.
+    ///
+    /// As typed means hostnames, not the addresses they resolved to. A resolution is true only for
+    /// the moment it was taken, so publishing it here would invite the UI to show an address the
+    /// service is not using.
+    /// </summary>
+    [JsonPropertyName("serverAddresses")] public Dictionary<string, List<string>> ServerAddresses { get; set; } = [];
 
     /// <summary>
     /// host:port of the relay this session is actually on, or null when not connected.

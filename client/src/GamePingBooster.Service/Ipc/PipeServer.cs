@@ -18,10 +18,10 @@ namespace GamePingBooster.Service.Ipc;
 /// updates, connection loss).
 ///
 /// Security: the pipe ACL only grants the local Users group read/write. The service accepts no
-/// file paths and no arbitrary commands from the UI - seven fixed verbs, with every
+/// file paths and no arbitrary commands from the UI - a fixed set of verbs, with every
 /// parameter checked here rather than in the UI. This is a privilege boundary; keep it narrow.
 ///
-/// Two of the seven carry a SECRET, and both are write-only: set-relay takes the pre-shared key,
+/// Two of them carry a SECRET, and both are write-only: set-relay takes the pre-shared key,
 /// set-token takes the licence token. Nothing ever sends either back up. Anything readable over
 /// this pipe is readable by every process running as the user, which is the whole reason the
 /// status message reports that a token EXISTS and when it expires, and never what it is.
@@ -353,6 +353,36 @@ internal sealed class PipeServer
                 reply.AckVerb = "set-relay-choice";
                 reply.CommandError = error;
                 reply.Relays = _engine.RelayOptions();
+                await PushAsync(reply).ConfigureAwait(false);
+                break;
+            }
+
+            // The server addresses a player typed in Settings - a Minecraft server, most often. It
+            // carries no secret, so unlike set-relay and set-token it is echoed back in the periodic
+            // status, which is what the Settings window reads to show the saved value.
+            //
+            // The name is checked here for the same reason set-relay is: anything on the machine can
+            // write to this pipe, and this one decides whose traffic goes through the relay. The
+            // addresses themselves are not checked against anything here - what may be routed is
+            // decided per connect, against the profile's relays and landmarks, and every refusal is
+            // logged. A name that does not resolve is the player's business until they press Connect.
+            case "set-server-address":
+            {
+                if (string.IsNullOrWhiteSpace(cmd.GameId))
+                {
+                    var bad = _engine.Snapshot();
+                    bad.AckVerb = "set-server-address";
+                    bad.CommandError = "No game was named for these addresses.";
+                    await PushAsync(bad).ConfigureAwait(false);
+                    break;
+                }
+
+                var error = await _engine.SetServerAddressAsync(cmd.GameId, cmd.ServerAddresses ?? [], ct)
+                    .ConfigureAwait(false);
+                if (error is not null) _log($"set-server-address rejected: {error}");
+                var reply = _engine.Snapshot();
+                reply.AckVerb = "set-server-address";
+                reply.CommandError = error;
                 await PushAsync(reply).ConfigureAwait(false);
                 break;
             }

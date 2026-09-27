@@ -440,6 +440,11 @@ internal sealed partial class TunnelEngine : IAsyncDisposable
             }
             source = licensed ? "pushed" : "cached";
             chosen = SealedProfileDirectory;
+
+            // A pushed profile is the whole truth on a licensed machine, and this is the only
+            // place a shipped file gets a say in one. See AddShippedGameOnlyProfiles for why a
+            // game-only file is safe to add here and a file with ranges in it is not read at all.
+            await AddShippedGameOnlyProfilesAsync(bundles, ct).ConfigureAwait(false);
         }
         else if (File.Exists(local))
         {
@@ -500,9 +505,285 @@ internal sealed partial class TunnelEngine : IAsyncDisposable
         ApplySelfHostedRelay();
     }
 
+    /// <summary>
+    /// Adds the shipped profiles that carry a game and nothing else, so a game the licence server
+    /// does not know about is still a game the service recognises.
+    ///
+    /// Why this exists at all. On a licensed machine a pushed, sealed profile is the only source
+    /// of ranges, and the list of games it holds is the licence server's. So a game nobody sells
+    /// here could not be added by shipping its file: once anything has been pushed, nothing read a
+    /// shipped file at all. Minecraft is exactly that game - a server is whichever one the player
+    /// joins, so it has no published, fixed address for a profile to carry - and without this the
+    /// player could type an address into Settings and the service would have no game to attach it
+    /// to. See SetServerAddressAsync.
+    ///
+    /// The filter is the point, and it is deliberately narrow. A shipped file is plaintext, on
+    /// disk, on every machine, and its CIDRs become Windows routes: letting one into a licensed
+    /// installation would hand out ranges nobody paid for, and would let an edited file in the
+    /// install directory quietly route traffic. So only a profile that declares no address of any
+    /// kind is taken, and anything else is skipped by name. What survives can add a game id, a
+    /// display name and a list of process names, and cannot contribute one address.
+    ///
+    /// A self-hosted machine never comes through here: its siblings are already merged,
+    /// unfiltered, by the branch above - that operator's own files beside their own configured
+    /// one, which is the arrangement that has always worked and is theirs to shape.
+    /// </summary>
+    private async Task AddShippedGameOnlyProfilesAsync(List<ProfileBundle> bundles, CancellationToken ct)
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "profiles");
+        if (!Directory.Exists(dir)) return;
+
+        var files = Directory.GetFiles(dir, "*.json")
+            .Where(f => !f.EndsWith(".example.json", StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in files)
+        {
+            ProfileBundle bundle;
+            try
+            {
+                bundle = ParseProfile(await File.ReadAllTextAsync(file, ct).ConfigureAwait(false), file);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log($"Skipping the shipped profile {Path.GetFileName(file)}: {ex.Message}");
+                continue;
+            }
+
+            if (!IsGameOnly(bundle))
+            {
+                _log($"Ignoring the shipped profile {Path.GetFileName(file)}: on a licensed machine only a " +
+                     "profile carrying no addresses is read here. Ranges come from the licence server.");
+                continue;
+            }
+
+            bundles.Add(bundle);
+            _log($"Took the game-only shipped profile {Path.GetFileName(file)} " +
+                 $"({string.Join(", ", bundle.Games.Select(g => g.Id))}).");
+        }
+    }
+
+    /// <summary>
+    /// Whether a profile contributes games and nothing else: no relay, and not one address.
+    ///
+    /// The relay check stands on its own even though the addresses are the worry.
+    /// <see cref="ProfileMerge"/> takes its relay list from the first bundle that has one, so a
+    /// shipped file carrying relays would not be a range leak so much as a takeover of the
+    /// relays a paid installation is measured against.
+    /// </summary>
+    private static bool IsGameOnly(ProfileBundle bundle) =>
+        bundle.Relays.Count == 0 &&
+        bundle.Games.All(game =>
+            game.LobbyAddresses.Count == 0 &&
+            game.Regions.All(region => region.Cidrs.Count == 0 && region.Landmarks.Count == 0));
+
     private static ProfileBundle ParseProfile(string json, string path) =>
         JsonSerializer.Deserialize(json, ProfileJsonContext.Default.ProfileBundle)
         ?? throw new InvalidOperationException($"The profile at {path} is not valid.");
+
+    // ------------------------------------------------------- server addresses
+
+    /// <summary>
+    /// What marks the region a typed-in server address ends up in, so the next connect can take the
+    /// old one out instead of adding a second copy. See <see cref="ApplyServerAddressesAsync"/>.
+    /// </summary>
+    private const string ServerAddressRegion = "user";
+
+    /// <summary>How long one host name is given before it is reported as not answering.</summary>
+    private static readonly TimeSpan ServerAddressResolveTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Puts the addresses the user typed in Settings onto the tunnel, as routes for that game.
+    ///
+    /// This is the other half of <see cref="AddShippedGameOnlyProfilesAsync"/>. Minecraft has no
+    /// published addresses - the server is whichever one the player joins - so the address can only
+    /// come from the person playing, and once it arrives it is an ordinary range like any other: it
+    /// goes through <see cref="LobbyRoutes"/>, which is what keeps a typed-in "server" from routing
+    /// the player's own router, the relay, or a landmark the game measures regions against.
+    ///
+    /// Called at connect and after every reconnect, not once at load, because the answer is a
+    /// DNS lookup. A server that moved since yesterday resolves somewhere else now, and a cached
+    /// /32 is a route to a stranger's machine: it would send the player's game traffic - and that
+    /// traffic's source address - to an address the player never named. Each call throws away the
+    /// region it built last time and resolves again, so a name that stops resolving simply stops
+    /// being routed rather than being pinned to wherever it used to live.
+    ///
+    /// The game it attaches to has to exist in the profile, which is why the game-only shipped
+    /// profile is loaded even on a licensed machine: there is no way to hang an address on a game
+    /// the profile has never heard of.
+    ///
+    /// A failure never fails the connection. Everything refused is logged by name and reason, and
+    /// the tunnel carries on with whatever is left - a server that is not routed is exactly the
+    /// unaccelerated path the player had before typing anything in.
+    /// </summary>
+    private async Task ApplyServerAddressesAsync(CancellationToken ct)
+    {
+        if (_profile is null || _config.ServerAddresses.Count == 0) return;
+
+        foreach (var (gameId, entries) in _config.ServerAddresses)
+        {
+            if (entries.Count == 0) continue;
+            var game = _profile.Games.FirstOrDefault(g => g.Id.Equals(gameId, StringComparison.OrdinalIgnoreCase));
+            if (game is null)
+            {
+                _log($"No game with id '{gameId}' in this profile, so the server addresses typed for it were not used.");
+                continue;
+            }
+
+            // What the last connect resolved, dropped before the new answer is looked up rather
+            // than added to. Appending is what would make a reconnect keep yesterday's address.
+            game.Regions.RemoveAll(r => string.Equals(r.Source, ServerAddressRegion, StringComparison.OrdinalIgnoreCase));
+
+            var rejected = new List<LobbyRoutes.Rejection>();
+            var resolved = await ResolveServerAddressesAsync(entries, rejected, ct).ConfigureAwait(false);
+
+            // The same exclusion list InstallLobbyRoutes builds, for the same reason: failover can
+            // pin a relay that is not the current one, and both are refused as a destination.
+            var relays = _profile.Relays.Select(r => r.Endpoint)
+                .Concat(RelayPaths.Expand(_profile.Relays).Select(p => p.Endpoint))
+                .ToList();
+            if (_relay is not null) relays.Add(_relay.Endpoint);
+            var landmarks = game.Regions.SelectMany(r => r.Landmarks);
+
+            var routes = LobbyRoutes.ToHostRoutes(resolved, relays, landmarks, rejected);
+            foreach (var refusal in rejected)
+            {
+                _log($"WARNING: server address '{refusal.Entry}' for {game.Name} is not routed - {refusal.Reason}.");
+            }
+            if (routes.Count == 0)
+            {
+                _log($"No usable server address for {game.Name}, so its traffic stays on the normal path.");
+                continue;
+            }
+
+            // A region of its own whenever the profile has regions already. Folding a typed-in
+            // address into a measured region would put that region on the relay while every other
+            // region stayed direct, and the game would compare the two - the same mistake
+            // WarnAboutRoutedLandmarks exists to catch. A profile with no regions is the Minecraft
+            // case, where this is the only region there is.
+            var region = new RegionEntry
+            {
+                Id = "server",
+                Name = "Server",
+                Source = ServerAddressRegion,
+                // Only worth saying when it is a region alongside the profile's own, where a reader
+                // of the status screen would otherwise wonder where it came from.
+                Note = game.Regions.Count == 0 ? null : $"Typed in for {game.Name}",
+            };
+            region.Cidrs.AddRange(routes);
+            game.Regions.Add(region);
+
+            _log($"Routed {routes.Count} server address(es) for {game.Name} " +
+                 $"({string.Join(", ", routes)}).");
+        }
+    }
+
+    /// <summary>
+    /// Turns what the user typed into IPv4 addresses. A name is looked up; an address is taken as
+    /// written. Everything that cannot become a public IPv4 address lands in
+    /// <paramref name="rejected"/>, which is the report the caller logs.
+    ///
+    /// A name with several A records gets all of them, not the first. Which one the game connects
+    /// to is the game's choice, and routing one and not the others is how a session that answered
+    /// instantly on the first try ends up direct on every retry after a failover.
+    ///
+    /// The lookup is bounded, because this runs inside a connect: a name that does not answer must
+    /// cost three seconds, not the connect. It is not a network route, so nothing here can leave
+    /// the address unresolved and used - a lookup that times out produces no route at all.
+    /// </summary>
+    private static async Task<List<string>> ResolveServerAddressesAsync(IReadOnlyList<string> entries,
+        List<LobbyRoutes.Rejection> rejected, CancellationToken ct)
+    {
+        var addresses = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var raw in entries)
+        {
+            var entry = (raw ?? "").Trim();
+            if (entry.Length == 0) continue;
+
+            switch (Uri.CheckHostName(entry))
+            {
+                case UriHostNameType.IPv4:
+                    if (seen.Add(entry)) addresses.Add(entry);
+                    continue;
+
+                case UriHostNameType.Dns:
+                    List<string> answers;
+                    try
+                    {
+                        answers = await LookupAsync(entry, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // The resolver's own words, because "it did not resolve" and "the DNS
+                        // server is unreachable" are different things to go looking for.
+                        rejected.Add(new LobbyRoutes.Rejection(entry, $"it could not be looked up ({ex.Message})"));
+                        continue;
+                    }
+                    if (answers.Count == 0)
+                    {
+                        rejected.Add(new LobbyRoutes.Rejection(entry,
+                            "it resolved, but to no IPv4 address"));
+                        continue;
+                    }
+                    foreach (var answer in answers)
+                    {
+                        if (seen.Add(answer)) addresses.Add(answer);
+                    }
+                    continue;
+
+                // CheckHostName says IPv6 for a v6 literal and Unknown for anything else. A v6
+                // address is refused rather than quietly narrowed: the tunnel routes IPv4, and a
+                // player who typed one wants an answer, not a silent no-op.
+                default:
+                    rejected.Add(new LobbyRoutes.Rejection(entry, "it is not a public host name or IPv4 address"));
+                    continue;
+            }
+        }
+
+        return addresses;
+    }
+
+    /// <summary>
+    /// <see cref="System.Net.Dns.GetHostAddressesAsync(string, CancellationToken)"/> with a deadline, so a name
+    /// that never answers delays the connect by three seconds rather than by the resolver's own idea
+    /// of how long to wait. Returns every IPv4 answer, unfiltered: whether one of them may be routed
+    /// is LobbyRoutes' judgement, and it makes that judgement on the address rather than on the name
+    /// the address was found under.
+    ///
+    /// Giving up here cancels the lookup rather than walking away from it. A pending DNS call nobody
+    /// is waiting on any more still holds its socket and its resolver, and if it fails afterwards the
+    /// exception has no reader - which is how a timed-out name on a bad network turns into a fault
+    /// reported against some later, unrelated operation.
+    /// </summary>
+    private static async Task<List<string>> LookupAsync(string host, CancellationToken ct)
+    {
+        // Linked, so that both deadlines reach the resolver: the caller's token, and the one below.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var lookup = System.Net.Dns.GetHostAddressesAsync(host, deadline.Token);
+
+        if (await Task.WhenAny(lookup, Task.Delay(ServerAddressResolveTimeout, deadline.Token)).ConfigureAwait(false) != lookup)
+        {
+            // The delay won. If that was the caller's token going off rather than the clock, this
+            // is a cancellation and belongs to the caller, not to this method.
+            ct.ThrowIfCancellationRequested();
+
+            await deadline.CancelAsync().ConfigureAwait(false);
+
+            // And the fault is read if it had already failed, or fails on the way out. Otherwise
+            // nothing observes it, and an unobserved task exception is reported at finalisation,
+            // long after anyone could work out which name it belonged to.
+            _ = lookup.ContinueWith(static faulted => _ = faulted.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return [];
+        }
+
+        var resolved = await lookup.ConfigureAwait(false);
+        return [.. resolved.Where(a => a.AddressFamily == AddressFamily.InterNetwork).Select(a => a.ToString())];
+    }
 
     // -------------------------------------------------------------- connect
 
@@ -601,6 +882,10 @@ internal sealed partial class TunnelEngine : IAsyncDisposable
             // opens in its first seconds, and one caught by a route after it opened is dropped by
             // the relay for carrying the wrong source address - a late lobby route hangs the lobby.
             InstallLobbyRoutes();
+            // Before the watcher starts, so a game that is already running is routed by the pass
+            // below rather than by the next poll - and before the routes, because these addresses
+            // are ranges like any other and the routes read them out of the profile.
+            await ApplyServerAddressesAsync(token).ConfigureAwait(false);
             phases.Mark("routing");
 
             // Watch EVERY game in the profile, so routes come and go with whichever one is opened.
@@ -2537,6 +2822,11 @@ internal sealed partial class TunnelEngine : IAsyncDisposable
 
                     InstallLobbyRoutes();
 
+                    // Resolved again rather than reusing what the last connect resolved: a
+                    // reconnect can be hours later, and a server that has moved since is one the
+                    // player meant to play on, not the one that has since taken the name.
+                    await ApplyServerAddressesAsync(ct).ConfigureAwait(false);
+
                     if (hadGameRoutes || _config.RouteWithoutGame || (_watcher?.IsGameRunning ?? false))
                     {
                         InstallRoutes();
@@ -3065,6 +3355,10 @@ internal sealed partial class TunnelEngine : IAsyncDisposable
             // value before anything has been tried. The key is deliberately absent - see the
             // set-relay comment in PipeServer.
             RelayEndpoints = _config.RelayEndpoints,
+            // Same reason, and no more secret than a list of server names. Reported as saved, as
+            // typed - the settings screen needs to show what is set, and what it is shown must be
+            // what will be resolved on the next connect rather than an address from an older one.
+            ServerAddresses = _config.ServerAddresses,
             // Ready to connect: SOME credential, and somewhere to send packets.
             //
             // The relay may come from the self-hosted setting OR from the profile's own list - both
@@ -3312,6 +3606,111 @@ internal sealed partial class TunnelEngine : IAsyncDisposable
             return $"Saved, but the profile could not be reloaded: {ex.Message}";
         }
         _log("Relay settings updated.");
+        return null;
+    }
+
+    /// <summary>
+    /// Saves the server addresses the user typed in Settings, and null is success. A message is a
+    /// failure, in the same shape and for the same reason as
+    /// <see cref="SetRelayAsync(IEnumerable{string}, string?, string?, string?, CancellationToken)"/>:
+    /// the Settings window shows it verbatim, so it has to be a sentence somebody can act on.
+    ///
+    /// What is stored is what was typed. Nothing is resolved here, and nothing is refused here: a
+    /// name that does not resolve today may resolve tomorrow, and a user who typed a private address
+    /// to test something should find it saved rather than told it was wrong by a form that has no
+    /// idea what the game will do with it. What may be routed is decided per connect, by
+    /// <see cref="ApplyServerAddressesAsync"/>, and everything refused there is logged.
+    ///
+    /// An empty list is a legitimate value - it is how a player says "I have no server" - and is
+    /// stored as a removed key rather than an empty one, so a game nobody has configured leaves
+    /// nothing in the file for the next reader to puzzle over.
+    /// </summary>
+    public async Task<string?> SetServerAddressAsync(string gameId, IEnumerable<string>? addresses,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(gameId))
+        {
+            return "No game was named for these addresses.";
+        }
+        if (_profile is null)
+        {
+            // Reloading first would be tidier, but the caller has just loaded, and a settings save
+            // is not the thing that fetches a profile. Saying so beats inventing an empty one.
+            return "There is no profile loaded yet, so there is no game to attach these addresses to.";
+        }
+        // Matched case-insensitively against the profile and then keyed by the profile's own
+        // spelling, so one game cannot end up filed twice under "Minecraft" and "minecraft" by two
+        // sessions that disagreed about capitalisation.
+        var game = _profile.Games.FirstOrDefault(g => g.Id.Equals(gameId, StringComparison.OrdinalIgnoreCase));
+        if (game is null)
+        {
+            return $"The profile has no game with id '{gameId}'.";
+        }
+
+        // Every value is kept exactly as written apart from its edges, and repeats go: a list with
+        // the same name twice says nothing a list with it once does not, and the user gets to see
+        // what was saved.
+        var cleaned = (addresses ?? [])
+            .Select(a => (a ?? "").Trim())
+            .Where(a => a.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Kept so the change can be undone if the write fails, for the reason spelled out in
+        // SetRelayAsync: settings the service is running with and has told the user it could not
+        // save are worse than settings it never accepted.
+        var had = _config.ServerAddresses.TryGetValue(game.Id, out var previous);
+        var previousList = previous ?? [];
+
+        if (cleaned.Count == 0)
+        {
+            _config.ServerAddresses.Remove(game.Id);
+        }
+        else
+        {
+            _config.ServerAddresses[game.Id] = cleaned;
+        }
+
+        try
+        {
+            _config.Save();
+        }
+        catch (Exception ex)
+        {
+            if (had) _config.ServerAddresses[game.Id] = previousList;
+            else _config.ServerAddresses.Remove(game.Id);
+            return $"Could not save the settings: {ex.Message}";
+        }
+
+        try
+        {
+            // A reload replaces the profile, which throws away the region the last connect built, so
+            // the new addresses need resolving and putting back before anything is reported. With no
+            // game running there is no route to install, and the next game start picks this up by
+            // itself - which is why InstallRoutes, not this method, is the one that reads them.
+            await LoadProfileAsync(ct).ConfigureAwait(false);
+            await ApplyServerAddressesAsync(ct).ConfigureAwait(false);
+            InstallRoutes();
+        }
+        catch (NoProfileAvailableException)
+        {
+            _log("Server addresses updated (no profile to reload yet).");
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The addresses ARE saved at this point, so this is not a failure of the save. Say so,
+            // rather than leaving the user to guess whether to type it all again.
+            //
+            // Cancellation is left out: an IPC caller that hung up, or a service shutting down, is not
+            // something the player did wrong with their typing, and "the operation was canceled" is not
+            // an answer they can act on. It travels on to whoever asked.
+            return $"Saved, but the addresses could not be applied: {ex.Message}";
+        }
+
+        _log(cleaned.Count == 0
+            ? $"Cleared the server addresses for {game.Name}."
+            : $"Saved {cleaned.Count} server address(es) for {game.Name}.");
         return null;
     }
 

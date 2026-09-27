@@ -81,6 +81,24 @@ public sealed class ServiceConfig
     /// </summary>
     [JsonPropertyName("lastGameId")] public string? LastGameId { get; set; }
 
+    /// <summary>
+    /// Server addresses the player typed in Settings, keyed by game id. A list each, because a
+    /// host may resolve to several addresses and a player may play on more than one server.
+    ///
+    /// These are stored as the player TYPED them, hostnames included, never as the addresses
+    /// they resolved to. A resolution is only true for the moment it was made - a name can move,
+    /// and a name that resolves differently tomorrow must not be silently pinned to today's
+    /// answer - so every connect asks again. What is kept is a hostname, which stays meaningful.
+    ///
+    /// They are not secrets and nothing here hides them: they are re-published in StatusMessage
+    /// so the settings screen can show what is saved without reading the service's disk. Compare
+    /// <see cref="Psk"/>, which is write-only in exactly the opposite way.
+    ///
+    /// Absent, empty, or a game id missing from it all mean the same thing: no route beyond what
+    /// the profile itself declares. A game listed here with an empty list is not an error.
+    /// </summary>
+    [JsonPropertyName("serverAddresses")] public Dictionary<string, List<string>> ServerAddresses { get; set; } = [];
+
     /// <summary>Virtual adapter name as shown in Network Connections.</summary>
     [JsonPropertyName("adapterName")] public string AdapterName { get; set; } = "Game Ping Booster";
 

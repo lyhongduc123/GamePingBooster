@@ -20,23 +20,51 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
 {
     private readonly bool _alreadyConfigured;
 
+    /// <summary>
+    /// The game whose server addresses this screen edits.
+    ///
+    /// App-side, not profile-side, and deliberately not asked of the profile: the settings screen
+    /// has to be able to name a game before anything has been saved for it, and the only game that
+    /// has ever been asked for here is Minecraft. The id is what the service files the list under,
+    /// and the service matches it against the profile case-insensitively, so this does not have to
+    /// agree with the profile's own spelling of it.
+    /// </summary>
+    public const string ServerAddressGameId = "minecraft";
+
     public SettingsViewModel(IEnumerable<string>? currentEndpoints, bool alreadyConfigured,
-        string? currentLicenceUrl = "https://gamepingbooster.com", bool? qualitySharing = null)
+        string? currentLicenceUrl = "https://gamepingbooster.com", bool? qualitySharing = null,
+        IEnumerable<string>? currentServerAddresses = null)
     {
         _endpoints = string.Join(Environment.NewLine, currentEndpoints ?? []);
         _alreadyConfigured = alreadyConfigured;
         _licenceUrl = currentLicenceUrl ?? string.Empty;
         _initialQualitySharing = qualitySharing;
         _qualitySharing = qualitySharing ?? true;
+        _serverAddresses = string.Join(Environment.NewLine, currentServerAddresses ?? []);
 
         // Kept so Save can tell whether there is anything for the service to do. See
-        // RelaySettingsChanged.
+        // RelaySettingsChanged and ServerAddressSettingsChanged.
         _initialEndpoints = SplitLines(_endpoints);
         _initialLicenceUrl = _licenceUrl.Trim();
+        _initialServerAddresses = SplitLines(_serverAddresses);
     }
 
     private readonly List<string> _initialEndpoints;
     private readonly string _initialLicenceUrl;
+    private readonly List<string> _initialServerAddresses;
+
+    /// <summary>
+    /// Whether the typed server addresses moved. Compared the way the service will store them -
+    /// trimmed, blanks dropped, case-insensitively deduplicated, in the order typed - so that
+    /// this asks the only question worth asking, which is whether saving would change the file.
+    /// Retyping a name in a different case, or adding a blank line, or pasting the same address
+    /// twice, is not a change worth a save and a profile reload.
+    /// </summary>
+    public bool ServerAddressSettingsChanged =>
+        !DistinctIgnoringCase(ServerAddressList).SequenceEqual(DistinctIgnoringCase(_initialServerAddresses));
+
+    private static List<string> DistinctIgnoringCase(IEnumerable<string> values) =>
+        values.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     /// <summary>
     /// Whether anything the SERVICE owns actually moved.
@@ -102,6 +130,29 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     /// <summary>The non-empty lines, which is what actually gets sent.</summary>
     public List<string> EndpointList => SplitLines(Endpoints);
 
+    /// <summary>
+    /// The game server to play on: a hostname or an IP, one per line.
+    ///
+    /// A multi-line box for the same reason the relay list is one, and for a stronger one - a
+    /// Minecraft player has a server address they were given in a chat window or a Discord post,
+    /// and pasting it is the whole interaction. Nothing here is checked as it is typed, because
+    /// this screen cannot know whether the name resolves today, resolves only on the player's own
+    /// network, or is a name they meant to try. What will not be routed is decided per connect and
+    /// written to the log; see set-server-address.
+    /// </summary>
+    private string _serverAddresses = string.Empty;
+    public string ServerAddresses
+    {
+        get => _serverAddresses;
+        set { if (Set(ref _serverAddresses, value)) { Raise(nameof(CanSave)); Saved = false; } }
+    }
+
+    /// <summary>The non-empty lines, which is what actually gets sent.</summary>
+    public List<string> ServerAddressList => SplitLines(ServerAddresses);
+
+    /// <summary>Watermark for the address box, naming what an entry has to be.</summary>
+    public string ServerAddressWatermark => Loc.T("settings.serverAddress.placeholder");
+
     private static List<string> SplitLines(string value) => value
         .Split('\n')
         .Select(line => line.Trim())
@@ -165,8 +216,13 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     /// weeks and the blank box was refused.
     /// </summary>
     public bool CanSave =>
-        (EndpointList.Count > 0 || !string.IsNullOrWhiteSpace(LicenceUrl)) &&
-        (EndpointList.Count == 0 || _alreadyConfigured || !string.IsNullOrWhiteSpace(Psk));
+        ((EndpointList.Count > 0 || !string.IsNullOrWhiteSpace(LicenceUrl)) &&
+            (EndpointList.Count == 0 || _alreadyConfigured || !string.IsNullOrWhiteSpace(Psk)))
+        // Or a server address that moved, on its own. The two halves above ask whether there is
+        // anything worth SAYING about the relays, and a player whose relays are all configured and
+        // who only wants to put in their Minecraft server has nothing to say about them - but Save
+        // still has something to send, so the button has to be live.
+        || ServerAddressSettingsChanged;
 
     private string? _error;
     public string? Error

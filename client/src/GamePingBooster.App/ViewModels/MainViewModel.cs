@@ -432,6 +432,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>The configured endpoints, for the settings screen to open with. Never the key.</summary>
     public IReadOnlyList<string> RelayEndpoints { get; private set; } = [];
 
+    /// <summary>
+    /// The configured server addresses per game, for the settings screen to open with. These are
+    /// not secret - they are names the player typed and the service can see in the routing table -
+    /// so unlike the key they are read back from the status rather than withheld.
+    /// </summary>
+    public IReadOnlyDictionary<string, List<string>> ServerAddresses { get; private set; } =
+        new Dictionary<string, List<string>>();
+
+    /// <summary>
+    /// The addresses stored for one game, or null if it has none.
+    ///
+    /// Case-insensitively, because the service files these under the id the PROFILE spells the
+    /// game with, and a profile is free to write "Minecraft" where the app asks for "minecraft".
+    /// Looking the dictionary up directly would quietly show an empty box over addresses that were
+    /// saved perfectly well, and the next save would then replace them with nothing.
+    /// </summary>
+    public IReadOnlyList<string>? ServerAddressesFor(string gameId) =>
+        ServerAddresses.FirstOrDefault(pair =>
+            string.Equals(pair.Key, gameId, StringComparison.OrdinalIgnoreCase)).Value;
+
     private string? _error;
     public string? Error
     {
@@ -1119,6 +1139,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ? string.Join("; ", paths.Select(p => $"{p.Region} → {p.RelayName}"))
             : "";
         RelayEndpoints = status.RelayEndpoints;
+        // Copied rather than kept by reference: the dictionary is the UI's own snapshot of a
+        // message that is about to be discarded, and SettingsViewModel reads it while this one is
+        // still being updated.
+        ServerAddresses = status.ServerAddresses is { } addresses
+            ? new Dictionary<string, List<string>>(addresses)
+            : new Dictionary<string, List<string>>();
         Configured = status.Configured;
         LicenceUrl = status.LicenceUrl;
         LicenceRefusal = Say(status.LicenceRefusalCode, status.LicenceRefusalArgs, status.LicenceRefusal);

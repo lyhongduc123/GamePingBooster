@@ -63,6 +63,16 @@
     </StackPanel>
 
     <StackPanel>
+      <TextBlock Classes="label" Text="{DynamicResource settings.serverAddress}" />
+      <TextBox Text="{Binding ServerAddresses}"
+               AcceptsReturn="True" TextWrapping="NoWrap"
+               MinHeight="60" MaxHeight="120"
+               VerticalContentAlignment="Top"
+               PlaceholderText="{Binding ServerAddressWatermark}" />
+      <TextBlock Classes="hint" Text="{DynamicResource settings.serverAddress.hint}" />
+    </StackPanel>
+
+    <StackPanel>
       <TextBlock Classes="label" Text="{DynamicResource settings.licence}" />
       <TextBox Text="{Binding LicenceUrl}" PlaceholderText="https://gamepingbooster.com" />
       <TextBlock Classes="hint" Text="{DynamicResource settings.licence.hint}" />

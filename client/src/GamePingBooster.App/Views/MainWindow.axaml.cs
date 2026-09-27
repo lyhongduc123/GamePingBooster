@@ -68,9 +68,14 @@ public partial class MainWindow : SurfaceWindow
 
         // Opened with what is CONFIGURED, never with the key: the service does not send one up,
         // deliberately. See the set-relay verb in PipeServer.
+        //
+        // The server addresses are read out of the dictionary rather than passed whole: this screen
+        // edits one game's. A service too old to send them at all simply leaves this null, and the
+        // box opens blank.
         var dialog = new SettingsWindow
         {
-            DataContext = new SettingsViewModel(vm.RelayEndpoints, vm.Configured, vm.LicenceUrl, vm.QualitySharing),
+            DataContext = new SettingsViewModel(vm.RelayEndpoints, vm.Configured, vm.LicenceUrl, vm.QualitySharing,
+                vm.ServerAddressesFor(SettingsViewModel.ServerAddressGameId)),
         };
         dialog.Attach(_pipe);
         await dialog.ShowDialog(this);

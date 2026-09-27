@@ -110,9 +110,12 @@ internal static class StringsVi
         ["tray.tooltipWithPing"] = "Game Ping Booster - {0}, {1}",
 
         // ------------------------------------------------------------------ settings window
-        ["settings.title"] = "Cài đặt relay",
+        // Không còn là "Cài đặt relay": cửa sổ này còn có ô máy chủ game cần vào, nên tên cũ không
+        // còn mô tả đúng nữa.
+        ["settings.title"] = "Cài đặt kết nối",
         ["settings.intro"] =
-            "Địa chỉ các relay của bạn và khoá dùng để cài chúng. Cả hai đều được in ra lúc bạn chạy bộ cài relay trên máy chủ.",
+            "Relay của bạn, khoá dùng để cài chúng, và máy chủ game bạn muốn vào. Địa chỉ relay và khoá " +
+            "đều được in ra lúc bạn chạy bộ cài relay trên máy chủ.",
         ["settings.relays"] = "Địa chỉ relay",
         ["settings.relays.hint"] =
             "Mỗi dòng một địa chỉ. Nếu có nhiều hơn một, app sẽ đo hết rồi dùng cái nhanh nhất, và tự chuyển sang " +
@@ -122,6 +125,12 @@ internal static class StringsVi
         ["settings.psk.placeholderNew"] = "44 ký tự",
         ["settings.psk.hintKeep"] = "Đã có khoá được lưu. App không hiện lại khoá, để trống ô này là giữ nguyên.",
         ["settings.psk.hintNew"] = "Bộ cài relay in ra khoá này, ngay cạnh địa chỉ.",
+        ["settings.serverAddress"] = "Máy chủ Minecraft",
+        ["settings.serverAddress.placeholder"] = "mc.example.com",
+        ["settings.serverAddress.hint"] =
+            "Mỗi dòng một tên miền hoặc địa chỉ IP, không kèm cổng. Để trống thì dùng máy chủ mặc định. " +
+            "Tên này được tra lại mỗi lần bạn kết nối, nên máy chủ dời sang địa chỉ mới vẫn vào được mà " +
+            "không cần sửa ô này.",
         ["settings.licence"] = "Máy chủ giấy phép",
         ["settings.licence.hint"] =
             "Nơi tài khoản Game Ping Booster của bạn đăng nhập và nơi lấy danh sách game. Đã được điền sẵn - cứ để " +

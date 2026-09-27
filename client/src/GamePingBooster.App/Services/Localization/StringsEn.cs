@@ -110,10 +110,14 @@ internal static class StringsEn
         ["tray.tooltipWithPing"] = "Game Ping Booster - {0}, {1}",
 
         // ------------------------------------------------------------------ settings window
-        ["settings.title"] = "Relay settings",
+        //
+        // No longer "relay settings": the screen also carries the game server to play on, and a
+        // title naming only the relays misdescribes it to somebody who came here to type one
+        // address and found three boxes about infrastructure instead.
+        ["settings.title"] = "Connection settings",
         ["settings.intro"] =
-            "The addresses of your relays and the key they were installed with. Both are printed by the relay's " +
-            "installer when you set up a server.",
+            "Your relays, the key they were installed with, and the game server to play on. The relay addresses and " +
+            "the key are printed by the relay's installer when you set up a server.",
         ["settings.relays"] = "Relay addresses",
         ["settings.relays.hint"] =
             "One per line. With more than one, the app measures them all and uses the fastest, and falls back to " +
@@ -123,6 +127,12 @@ internal static class StringsEn
         ["settings.psk.placeholderNew"] = "44 characters",
         ["settings.psk.hintKeep"] = "A key is already saved. It is not shown here, and leaving this blank keeps it.",
         ["settings.psk.hintNew"] = "Printed by the relay's installer, next to the endpoint.",
+        ["settings.serverAddress"] = "Minecraft server",
+        ["settings.serverAddress.placeholder"] = "mc.example.com",
+        ["settings.serverAddress.hint"] =
+            "One per line, a hostname or an IP, with no port. Leave it empty for the default server. The name is " +
+            "looked up again each time you connect, so a server that has moved to a new address is found without " +
+            "touching this box.",
         ["settings.licence"] = "Licence server",
         ["settings.licence.hint"] =
             "Where your Game Ping Booster account signs in, and where the game list comes from. Already filled in - " +

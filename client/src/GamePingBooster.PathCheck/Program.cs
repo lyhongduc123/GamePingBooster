@@ -52,6 +52,10 @@ internal static partial class Program
         LobbyChecks();
 
         Console.WriteLine();
+        Console.WriteLine("A typed game server:");
+        ServerAddressChecks();
+
+        Console.WriteLine();
         if (_failures == 0)
         {
             Console.WriteLine("All path checks passed.");

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "generatedUtc": "2026-09-26T00:00:00Z",
+  "note": "Game-only profile. Unlike the other games here it carries NO ranges and NO relays, and that is the point rather than an omission: a Minecraft server is whichever one the player joins, and its address is not published, fixed, or capturable by us. It is typed into Settings and resolved to a /32 at connect. What this file has to supply is the game itself - its id, its name, and the processes the watcher looks for - so that a typed address has a game to attach to. It is deliberately safe to merge into a licensed installation: see TunnelEngine.LoadProfileAsync, which only ever takes shipped files that declare no ranges.",
+  "games": [
+    {
+      "id": "minecraft",
+      "name": "Minecraft",
+      "processNames": [
+        "javaw.exe",
+        "java.exe"
+      ],
+      "lobbyAddresses": [],
+      "regions": []
+    }
+  ],
+  "relays": []
+}
